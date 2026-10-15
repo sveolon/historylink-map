@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HistoryLink Map of Washington</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.min.css">
+<style>
+  :root {
+    --bg: #faf8f4; --ink: #2a2622; --muted: #6d655c; --line: #ddd6cb;
+    --accent: #7a1f2b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { height: 100dvh; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); display: flex; flex-direction: column; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
+  header h1 { font: 600 18px Georgia, serif; margin: 0; color: var(--accent); }
+  header h1 small { font: 13px system-ui, sans-serif; color: var(--muted); font-weight: 400; margin-left: 6px; }
+  #filters { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 999px; padding: 3px 11px 3px 8px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .chip i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .chip.off { opacity: .4; }
+  #map { flex: 1; min-height: 0; }
+  .pin { width: 32px; height: 32px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
+  .leaflet-marker-icon:hover .pin { outline: 2px solid var(--accent); }
+  .leaflet-tooltip.banner { background: #fff; color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.25); padding: 6px 10px; font: 600 13px/1.3 system-ui, sans-serif; white-space: normal; width: max-content; max-width: 300px; }
+  .leaflet-tooltip.banner small { display: block; font-weight: 400; color: var(--muted); margin-top: 2px; }
+  .marker-cluster div { font-weight: 600; }
+  .essay-popup .leaflet-popup-content { margin: 10px 14px; }
+  .essay-popup .card b { display: block; font: 600 14px/1.3 system-ui, sans-serif; }
+  .essay-popup .card small { display: block; color: var(--muted); margin: 3px 0 8px; font-size: 12px; }
+  .essay-popup .card a { display: inline-block; color: var(--accent); font-weight: 600; text-decoration: none; padding: 4px 0; }
+  .locate { background: #fff; border: 2px solid rgba(0,0,0,.25); border-radius: 4px; padding: 6px 10px; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  @media (max-width: 600px) { header h1 small { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>HistoryLink Map <small>Washington State history, article by article</small></h1>
+  <div id="filters" role="group" aria-label="Filter by topic"></div>
+</header>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<script src="articles.js"></script>
+<script>
+// Article data (essay number, title, lat, lng, category) lives in articles.js.
+const CATEGORIES = {
+  settlement: { label: "Towns & settlement", color: "#2e7d6b", icon: "🏘️" },
+  politics:   { label: "Politics & labor",   color: "#8a2b3a", icon: "⚖️" },
+  nature:     { label: "Nature & parks",     color: "#4c8c2b", icon: "🌲" },
+  engineering:{ label: "Engineering & industry", color: "#c47a1c", icon: "🏗️" },
+  culture:    { label: "Culture & events",   color: "#6a4bb0", icon: "🎪" },
+  native:     { label: "Native & early history", color: "#1f6fa8", icon: "🛶" },
+  other:      { label: "Other history",      color: "#6d655c", icon: "📜" }
+};
+
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// Washington State, with some padding so edge markers aren't clipped.
+const WA = L.latLngBounds([45.5, -124.9], [49.05, -116.9]);
+// markerZoomAnimation off: otherwise every visible pin is animated separately on each zoom step.
+// Whole zoom levels only (fractional wheel zoom made Leaflet rescale tiles at every step); one scroll notch
+// = one level, with a short debounce so a fast scroll is a single zoom.
+const map = L.map("map", {
+  maxBounds: WA.pad(0.5), minZoom: 6, zoomSnap: 1, zoomDelta: 1,
+  wheelPxPerZoomLevel: 120, wheelDebounceTime: 60,
+  markerZoomAnimation: false, fadeAnimation: false
+}).fitBounds(WA);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 18, updateWhenZooming: false,  // load tiles once the zoom has settled, not at every step
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors | Essays &copy; <a href="https://www.historylink.org">HistoryLink.org</a> (unofficial index)'
+}).addTo(map);
+
+// chunkedLoading keeps the page responsive while thousands of markers are added; no animations = less redrawing.
+const cluster = L.markerClusterGroup({
+  showCoverageOnHover: false, chunkedLoading: true,
+  // Wider clusters when zoomed out keep the number of pins on screen (and so page elements) small.
+  maxClusterRadius: z => (z < 11 ? 80 : z < 14 ? 60 : z < 16 ? 45 : 30),
+  animate: false, animateAddingMarkers: false
+}).addTo(map);
+const CAN_HOVER = !!(window.matchMedia && matchMedia("(hover: hover) and (pointer: fine)").matches);
+const markers = ARTICLES.map(([id, title, lat, lng, cat]) => {
+  const c = CATEGORIES[cat];
+  const url = "https://www.historylink.org/File/" + id;
+  const m = L.marker([lat, lng], {
+    title: "", alt: title, keyboard: true,
+    icon: L.divIcon({
+      className: "",
+      html: `<div class="pin" style="background:${c.color}">${c.icon}</div>`,
+      iconSize: [32, 32], iconAnchor: [16, 16], tooltipAnchor: [18, 0]
+    })
+  });
+  if (CAN_HOVER) {
+    // Mouse: tooltip on hover (created on first hover, not for all markers up front), click opens the essay.
+    m.once("mouseover", () => {
+      m.bindTooltip(`${esc(title)}<small>${esc(c.label)} · click to open</small>`, { className: "banner", direction: "right" });
+      m.openTooltip();
+    });
+    m.on("click", () => window.open(url, "_blank", "noopener"));
+  } else {
+    // Touch: there is no hover, so a tap shows a card with the title and a real link.
+    m.bindPopup(`<div class="card"><b>${esc(title)}</b><small>${esc(c.label)}</small>` +
+                `<a href="${url}" target="_blank" rel="noopener">Open on HistoryLink.org ›</a></div>`,
+                { className: "essay-popup", maxWidth: 260, autoPanPadding: [20, 70] });
+  }
+  m.cat = cat;
+  return m;
+});
+
+// Topic filters
+const active = new Set(Object.keys(CATEGORIES));
+function render() {
+  cluster.clearLayers();
+  cluster.addLayers(markers.filter(m => active.has(m.cat)));
+}
+const filters = document.getElementById("filters");
+for (const [key, c] of Object.entries(CATEGORIES)) {
+  const b = document.createElement("button");
+  b.className = "chip";
+  b.type = "button";
+  b.innerHTML = `<i style="background:${c.color}"></i>${c.label}`;
+  b.onclick = () => {
+    active.has(key) ? active.delete(key) : active.add(key);
+    b.classList.toggle("off", !active.has(key));
+    render();
+  };
+  filters.appendChild(b);
+}
+render();
+
+// "Near me": centre the map on the visitor's position (works on a real https host, not inside a sandboxed page).
+if (navigator.geolocation && location.protocol.startsWith("http") && window.top === window) {
+  const Locate = L.Control.extend({
+    options: { position: "topleft" },
+    onAdd() {
+      const b = L.DomUtil.create("button", "locate");
+      b.type = "button"; b.textContent = "📍 Near me";
+      L.DomEvent.disableClickPropagation(b);
+      b.onclick = () => { b.textContent = "Locating…"; map.locate({ setView: true, maxZoom: 15 }); };
+      this._b = b; return b;
+    }
+  });
+  const ctl = new Locate().addTo(map);
+  let dot;
+  map.on("locationfound", e => {
+    ctl._b.textContent = "📍 Near me";
+    if (dot) dot.remove();
+    dot = L.circleMarker(e.latlng, { radius: 8, color: "#fff", weight: 3, fillColor: "#1a73e8", fillOpacity: 1 }).addTo(map);
+  });
+  map.on("locationerror", () => { ctl._b.textContent = "📍 Near me (location unavailable)"; });
+}
+</script>
+</body>
+</html>
